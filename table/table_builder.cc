@@ -91,32 +91,49 @@ Status TableBuilder::ChangeOptions(const Options& options) {
   return Status::OK();
 }
 
+// 往文件中添加 key-value 对
 void TableBuilder::Add(const Slice& key, const Slice& value) {
   Rep* r = rep_;
   assert(!r->closed);
   if (!ok()) return;
+  // 如果之前有一个 entry 了，需要做一下 Key 的判断
   if (r->num_entries > 0) {
+    // 确保当前的 Key 大于之前最后一个插入的 Key
     assert(r->options.comparator->Compare(key, Slice(r->last_key)) > 0);
   }
 
+
+  // 写完一个 DataBlock 落盘后需要写 index_block 的 entry
   if (r->pending_index_entry) {
+    // 确保 data_block 是空的
     assert(r->data_block.empty());
+    // 从上一个 DataBlock 中获取一个最大的 Key，和当前的 Key 生成一个最短的 Key
     r->options.comparator->FindShortestSeparator(&r->last_key, key);
     std::string handle_encoding;
+
+    // 往这个 Index-block 中添加一个条目, 这里记录了上一个 Data-block 的偏移量和大小，作为 Index-Block 中的一个条目
+    // 注意第一次的时候 offset 是 0，size 是 datablock 的大小，这个大小不包括 trailer (type+crc) 的大小
     r->pending_handle.EncodeTo(&handle_encoding);
+    // 往 Index-block 中写入数据
+    // 往 Index-block 中写入源数据以及对应的偏移量和大小，Key 是上一个 Data-block 的最大 Key，Value 是上一个 Data-block 的偏移量和大小
+    // 这个的 Key 是上一个 Data-block 的最大 Key，Value 是上一个 Data-block 的偏移量和大小 (用 Slice 存储)
     r->index_block.Add(r->last_key, Slice(handle_encoding));
     r->pending_index_entry = false;
   }
 
+  // 如果在 Option 设置中打开了布隆过滤器，则调用 AddKey 加入到 filter_block 中
   if (r->filter_block != nullptr) {
     r->filter_block->AddKey(key);
   }
 
+  // 替换最后一个 Key 的值以及更新条目
   r->last_key.assign(key.data(), key.size());
   r->num_entries++;
+  // 第一步先开始往 Data-block 中添加数据
   r->data_block.Add(key, value);
 
   const size_t estimated_block_size = r->data_block.CurrentSizeEstimate();
+  // 判断当前的这个 block 是否已经达到了 block_size 的大小，如果达到了就 Flush，默认配置是 4KB
   if (estimated_block_size >= r->options.block_size) {
     Flush();
   }
@@ -126,11 +143,13 @@ void TableBuilder::Flush() {
   Rep* r = rep_;
   assert(!r->closed);
   if (!ok()) return;
+  // 判断 data_block 是否为空
   if (r->data_block.empty()) return;
   assert(!r->pending_index_entry);
   WriteBlock(&r->data_block, &r->pending_handle);
   if (ok()) {
     r->pending_index_entry = true;
+    // 等待刷盘
     r->status = r->file->Flush();
   }
   if (r->filter_block != nullptr) {
@@ -138,6 +157,7 @@ void TableBuilder::Flush() {
   }
 }
 
+// 将一个 Block 写入到文件中
 void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   // File format contains a sequence of blocks where each block has:
   //    block_data: uint8[n]
@@ -150,6 +170,7 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   Slice block_contents;
   CompressionType type = r->options.compression;
   // TODO(postrelease): Support more compression options: zlib?
+  // 选择压缩算法对一个 data-block 进行压缩
   switch (type) {
     case kNoCompression:
       block_contents = raw;
@@ -186,23 +207,32 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   }
   WriteRawBlock(block_contents, type, handle);
   r->compressed_output.clear();
+  // 将 buffer, 重启点等信息清空
   block->Reset();
 }
 
+// 将一个 Raw-Block 的内容落盘到文件中
+// 这里说的 Raw-Block 可以表示任何 Block, 不仅仅是 Data-Block
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type, BlockHandle* handle) {
   Rep* r = rep_;
+  // 一开始的时候这个 offset 是 0
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
+  // 先往文件里面追加 block_contents
   r->status = r->file->Append(block_contents);
   if (r->status.ok()) {
     char trailer[kBlockTrailerSize];
     trailer[0] = type;
+    // 计算出 crc 校验码
     uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
     crc = crc32c::Extend(crc, trailer, 1);  // Extend crc to cover block type
+    // 将 crc 校验码写入到 trailer 中
     EncodeFixed32(trailer + 1, crc32c::Mask(crc));
+    // 再往文件中追加 trailer
     r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
     if (r->status.ok()) {
+      // 更新 offset
       r->offset += block_contents.size() + kBlockTrailerSize;
     }
   }
@@ -210,37 +240,52 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
 
 Status TableBuilder::status() const { return rep_->status; }
 
+// 如果一个 immutable 中所有的数据都被写到 Data-Block 中并且落盘的话，那么就需要调用 Finish
+// Finish 会将 filter block, metaindex block, index block, footer 写入到文件中
 Status TableBuilder::Finish() {
   Rep* r = rep_;
   Flush();
   assert(!r->closed);
   r->closed = true;
 
+  // 这里的 handle 主要用于后续 footer 的写入，主要记载了每个 block 的 offset 和 size
   BlockHandle filter_block_handle, metaindex_block_handle, index_block_handle;
 
   // Write filter block
   if (ok() && r->filter_block != nullptr) {
+    // 将布隆过滤器写入到文件中, 这里 filter_block_handle 记录了 filter block 的 offset 和 size
+    // 这里的 offset 实际上就是最后的 Data-Block 的 offset, size 就是 filter-block 的大小
     WriteRawBlock(r->filter_block->Finish(), kNoCompression,
                   &filter_block_handle);
   }
 
   // Write metaindex block
+  // metaindex 用于记录 filter block 的位置
   if (ok()) {
     BlockBuilder meta_index_block(&r->options);
     if (r->filter_block != nullptr) {
       // Add mapping from "filter.Name" to location of filter data
       std::string key = "filter.";
+      // 这里是将 filter block 的名字写入到 meta_index_block 中
+      // 为 filter.leveldb.BuiltinBloomFilter2
       key.append(r->options.filter_policy->Name());
       std::string handle_encoding;
+      // 记录了最后一次 Data-Block 写入的大小和 offset
+      // 也就是 filter block 的起始点位和 filter block 的大小
       filter_block_handle.EncodeTo(&handle_encoding);
+      // 将 filter block 的名字和 handle 写入到 meta_index_block 中
       meta_index_block.Add(key, handle_encoding);
     }
 
     // TODO(postrelease): Add stats and other meta blocks
+    // 将 meta_index_block 写入到文件中，后面追加了 crc 校验码以及 type
+    // meta_index_block 只有一条 entry, 用来记录 filter block 的位置和名字
+    // 所以 MetaIndex Block 主要是记录了 filter block 的起始位置，大小和名字
     WriteBlock(&meta_index_block, &metaindex_block_handle);
   }
 
   // Write index block
+  // 补全最后一个写 DataBlock 的 IndexBlock 条目
   if (ok()) {
     if (r->pending_index_entry) {
       r->options.comparator->FindShortSuccessor(&r->last_key);

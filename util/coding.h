@@ -51,6 +51,7 @@ char* EncodeVarint64(char* dst, uint64_t value);
 // Lower-level versions of Put... that write directly into a character buffer
 // REQUIRES: dst has enough space for the value being written
 
+// 将一个 uint32_t（4 字节无符号整数）编码为 固定长度的 4 字节，并存储到 dst 指向的缓冲区中 
 inline void EncodeFixed32(char* dst, uint32_t value) {
   uint8_t* const buffer = reinterpret_cast<uint8_t*>(dst);
 
@@ -61,6 +62,7 @@ inline void EncodeFixed32(char* dst, uint32_t value) {
   buffer[3] = static_cast<uint8_t>(value >> 24);
 }
 
+// 将一个 uint64_t（8 字节无符号整数）编码为 固定长度的 8 字节，并存储到 dst 指向的缓冲区中
 inline void EncodeFixed64(char* dst, uint64_t value) {
   uint8_t* const buffer = reinterpret_cast<uint8_t*>(dst);
 
@@ -78,6 +80,7 @@ inline void EncodeFixed64(char* dst, uint64_t value) {
 // Lower-level versions of Get... that read directly from a character buffer
 // without any bounds checking.
 
+// 从给定的内存位置解码出一个 32 位的无符号整数，也就是利用 4 个字节拼接出一个 32 位的无符号整数
 inline uint32_t DecodeFixed32(const char* ptr) {
   const uint8_t* const buffer = reinterpret_cast<const uint8_t*>(ptr);
 
@@ -88,6 +91,7 @@ inline uint32_t DecodeFixed32(const char* ptr) {
          (static_cast<uint32_t>(buffer[3]) << 24);
 }
 
+// 从给定的内存位置解码出一个 64 位的无符号整数，也就是利用 8 个字节拼接出一个 64 位的无符号整数
 inline uint64_t DecodeFixed64(const char* ptr) {
   const uint8_t* const buffer = reinterpret_cast<const uint8_t*>(ptr);
 
@@ -105,14 +109,18 @@ inline uint64_t DecodeFixed64(const char* ptr) {
 // Internal routine for use by fallback path of GetVarint32Ptr
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value);
+//返回一个指向下一个未处理字节的指针                                    
 inline const char* GetVarint32Ptr(const char* p, const char* limit,
                                   uint32_t* value) {
+  // 检查是否越界                                 
   if (p < limit) {
     uint32_t result = *(reinterpret_cast<const uint8_t*>(p));
+    // 检查最高位是否是 0，如果是 0 的话可以直接解析为 uint32_t
     if ((result & 128) == 0) {
       *value = result;
       return p + 1;
     }
+    // 如果最高位不是 0 说明是 1, 说明后面还需要进行解析
   }
   return GetVarint32PtrFallback(p, limit, value);
 }

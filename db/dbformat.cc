@@ -12,6 +12,7 @@
 
 namespace leveldb {
 
+// 将一个 uint64_t 的 sequnce 和 ValueType 编码到一个 uint64_t 中，一共占 8 个字节
 static uint64_t PackSequenceAndType(uint64_t seq, ValueType t) {
   assert(seq <= kMaxSequenceNumber);
   assert(t <= kValueTypeForSeek);
@@ -114,20 +115,27 @@ bool InternalFilterPolicy::KeyMayMatch(const Slice& key, const Slice& f) const {
   return user_policy_->KeyMayMatch(ExtractUserKey(key), f);
 }
 
+// 将用户提供的 user_key 和 SequenceNumber 编码到一个字节数组中
 LookupKey::LookupKey(const Slice& user_key, SequenceNumber s) {
   size_t usize = user_key.size();
+  // 这里 +13 的目的是 SequenceNumber 和 ValueType 占 8 个字节，Varint32 最多占 5 个字节
   size_t needed = usize + 13;  // A conservative estimate
   char* dst;
+  // 如果大小小于 space_ 的大小，则直接使用 space_，否则分配内存
   if (needed <= sizeof(space_)) {
     dst = space_;
   } else {
     dst = new char[needed];
   }
+
   start_ = dst;
+  // 将 user_key 的长度进行 Varint 编码后插到 dst 中
   dst = EncodeVarint32(dst, usize + 8);
   kstart_ = dst;
+  // 将 user_key 的内容插到 dst 中
   std::memcpy(dst, user_key.data(), usize);
   dst += usize;
+  // 将 SequenceNumber 和 ValueType 存储在一个字节中
   EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));
   dst += 8;
   end_ = dst;

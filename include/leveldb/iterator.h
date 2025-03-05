@@ -21,6 +21,7 @@
 
 namespace leveldb {
 
+ // LevelDB 自己实现的迭代器接口 
 class LEVELDB_EXPORT Iterator {
  public:
   Iterator();

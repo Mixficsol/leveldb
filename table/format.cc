@@ -13,6 +13,7 @@
 
 namespace leveldb {
 
+// 将 offset_ 和 size_ 编码到 dst 中
 void BlockHandle::EncodeTo(std::string* dst) const {
   // Sanity check that all fields have been set
   assert(offset_ != ~static_cast<uint64_t>(0));
@@ -29,11 +30,18 @@ Status BlockHandle::DecodeFrom(Slice* input) {
   }
 }
 
+// 设置页脚的两个 BlockHandle，metaindex_handle_ 和 index_handle_
 void Footer::EncodeTo(std::string* dst) const {
+  // 记录一下原始的大小
   const size_t original_size = dst->size();
+  // 记录 metaindex-block 的起始点位和大小
   metaindex_handle_.EncodeTo(dst);
+  // 记录 index-block 的起始点位和大小
   index_handle_.EncodeTo(dst);
+  // 上面两个 BlockHandle 最多需要 40 个字节
+  // 扩充到 kEncodedLength 的大小， 2 * 20 个字节
   dst->resize(2 * BlockHandle::kMaxEncodedLength);  // Padding
+  // 添加魔数
   PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber & 0xffffffffu));
   PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber >> 32));
   assert(dst->size() == original_size + kEncodedLength);

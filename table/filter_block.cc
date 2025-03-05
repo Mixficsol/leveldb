@@ -13,26 +13,30 @@ namespace leveldb {
 
 // Generate new filter every 2KB of data
 static const size_t kFilterBaseLg = 11;
-static const size_t kFilterBase = 1 << kFilterBaseLg;
+static const size_t kFilterBase = 1 << kFilterBaseLg; // 一个 Filter 作用于 2048 字节的数据块
 
 FilterBlockBuilder::FilterBlockBuilder(const FilterPolicy* policy)
     : policy_(policy) {}
 
 void FilterBlockBuilder::StartBlock(uint64_t block_offset) {
-  uint64_t filter_index = (block_offset / kFilterBase);
+  uint64_t filter_index = (block_offset / kFilterBase); // 计算当前 block_offset 对应的 filter 的索引
   assert(filter_index >= filter_offsets_.size());
-  while (filter_index > filter_offsets_.size()) {
+  while (filter_index > filter_offsets_.size()) { // 如果 filter 的索引超过当前 filter_offsets_ 的大小，那么就需要生成新的 filter
     GenerateFilter();
   }
 }
 
+// 将 key 添加到 keys_ 中，将 key 的起始位置添加到 start_ 中
 void FilterBlockBuilder::AddKey(const Slice& key) {
   Slice k = key;
   start_.push_back(keys_.size());
   keys_.append(k.data(), k.size());
 }
 
+// 将 fliter 中的数据写到 result_ 中
 Slice FilterBlockBuilder::Finish() {
+  // 如果 start_ 中还有数据的话，那么就需要生成一个新的 filter
+  // 这里的 start_ 每次记录一个 DataBlock 中所有的 Key, 根据这个生成一个 Filter 之后自动清空
   if (!start_.empty()) {
     GenerateFilter();
   }
@@ -40,14 +44,18 @@ Slice FilterBlockBuilder::Finish() {
   // Append array of per-filter offsets
   const uint32_t array_offset = result_.size();
   for (size_t i = 0; i < filter_offsets_.size(); i++) {
+    // 将 filter_offsets_ 中的数据追加写到 result_ 中，也就是每个 filter 的偏移量
     PutFixed32(&result_, filter_offsets_[i]);
   }
 
+  // 将最后一个 filter 的偏移量追加写到 result_ 中
   PutFixed32(&result_, array_offset);
+  // 将 kFilterBaseLg 写到 result_ 中, kFilterBaseLg 表示 Bloom 的 Hash 计算粒度 
   result_.push_back(kFilterBaseLg);  // Save encoding parameter in result
   return Slice(result_);
 }
 
+// 生成一个 filter, 并将结果追加到 result_ 中
 void FilterBlockBuilder::GenerateFilter() {
   const size_t num_keys = start_.size();
   if (num_keys == 0) {
@@ -58,6 +66,7 @@ void FilterBlockBuilder::GenerateFilter() {
 
   // Make list of keys from flattened key structure
   start_.push_back(keys_.size());  // Simplify length computation
+  // 将 keys_ 中的数据提取出来，放到 tmp_keys_ 中
   tmp_keys_.resize(num_keys);
   for (size_t i = 0; i < num_keys; i++) {
     const char* base = keys_.data() + start_[i];
@@ -66,7 +75,10 @@ void FilterBlockBuilder::GenerateFilter() {
   }
 
   // Generate filter for current set of keys and append to result_.
+  // filter_offsets_ 记录了中每个 filter 的偏移量，最开始的时候这个偏移量是 0
+  // filter 的实际内容是记录在 result_ 中
   filter_offsets_.push_back(result_.size());
+  // 根据一组 Keys 生成一个 Filter, 将 filter 的数据内容追加到 result_ 中
   policy_->CreateFilter(&tmp_keys_[0], static_cast<int>(num_keys), &result_);
 
   tmp_keys_.clear();

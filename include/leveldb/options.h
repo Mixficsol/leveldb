@@ -151,16 +151,22 @@ struct LEVELDB_EXPORT Options {
 struct LEVELDB_EXPORT ReadOptions {
   // If true, all data read from underlying storage will be
   // verified against corresponding checksums.
+  // 设置为 true 的时候，会从底层存储读取数据的时候，验证数据的校验和
+  // 校验和用于验证数据完整性的一种技术，确保数据没有被损坏或者篡改
   bool verify_checksums = false;
 
   // Should the data read for this iteration be cached in memory?
   // Callers may wish to set this field to false for bulk scans.
+  // 如果设置为 true, 则读取的数据会被缓存到内存中，在后续的读取中如果数据已经缓存
+  // 就不需要从磁盘上面读取
   bool fill_cache = true;
 
   // If "snapshot" is non-null, read as of the supplied snapshot
   // (which must belong to the DB that is being read and which must
   // not have been released).  If "snapshot" is null, use an implicit
   // snapshot of the state at the beginning of this read operation.
+  // 指定了一个快照，如果设置了快照就会以该快照的状态为准进行读取，如果是 nullpter，
+  // 即读取操作会看到读取开始时刻的数据库状态
   const Snapshot* snapshot = nullptr;
 };
 
