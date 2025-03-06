@@ -35,43 +35,56 @@ struct Table::Rep {
   Block* index_block;
 };
 
+// 负责打开一个 SSTable 文件并为后续的查询操作做准备
 Status Table::Open(const Options& options, RandomAccessFile* file,
                    uint64_t size, Table** table) {
   *table = nullptr;
+  // 如果文件大小小于页脚的大小，那么就不是一个 SST 文件
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");
   }
 
+  // 读取页脚
   char footer_space[Footer::kEncodedLength];
   Slice footer_input;
+  // 将 footer 的内容读取到 footer_input 中
   Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
                         &footer_input, footer_space);
   if (!s.ok()) return s;
 
   Footer footer;
+  // 解析页脚
   s = footer.DecodeFrom(&footer_input);
   if (!s.ok()) return s;
 
   // Read the index block
   BlockContents index_block_contents;
   ReadOptions opt;
+  // 如果开启了 paranoid_checks，那么就需要校验 checksum
   if (options.paranoid_checks) {
     opt.verify_checksums = true;
   }
+
+  // 读取 index block, 将文件内容读取到 index_block_contents 中
   s = ReadBlock(file, opt, footer.index_handle(), &index_block_contents);
 
   if (s.ok()) {
     // We've successfully read the footer and the index block: we're
     // ready to serve requests.
+    // 创建一个 Block 对象来存储 index_block 的内容。
     Block* index_block = new Block(index_block_contents);
+    // 创建一个 Rep 对象, 将元信息保存到 Rep 中
+    // Rep 类是 Table 类的一个内部类，用于保存 Table 的元信息
     Rep* rep = new Table::Rep;
     rep->options = options;
     rep->file = file;
     rep->metaindex_handle = footer.metaindex_handle();
     rep->index_block = index_block;
+    // 如果开启了 block_cache，那么就为这个 Table 创建一个 cache_id
     rep->cache_id = (options.block_cache ? options.block_cache->NewId() : 0);
     rep->filter_data = nullptr;
     rep->filter = nullptr;
+    // 创建一个 Table 对象, 并将 rep 保存到 Table 中
     *table = new Table(rep);
     (*table)->ReadMeta(footer);
   }
@@ -79,6 +92,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
   return s;
 }
 
+// 通过读取 meta_index_block 的内容，提取出 filter block 的内容
 void Table::ReadMeta(const Footer& footer) {
   if (rep_->options.filter_policy == nullptr) {
     return;  // Do not need any metadata
@@ -91,23 +105,29 @@ void Table::ReadMeta(const Footer& footer) {
     opt.verify_checksums = true;
   }
   BlockContents contents;
+  // 将 meta_index_block 的内容读取到 contents 中
   if (!ReadBlock(rep_->file, opt, footer.metaindex_handle(), &contents).ok()) {
     // Do not propagate errors since meta info is not needed for operation
     return;
   }
+  // 创建一个 Meta-Block 对象来存储 meta_index_block 的内容
   Block* meta = new Block(contents);
 
+  // 创建一个 block 的迭代器
   Iterator* iter = meta->NewIterator(BytewiseComparator());
   std::string key = "filter.";
   key.append(rep_->options.filter_policy->Name());
+  // 查找 filter block 的位置
   iter->Seek(key);
   if (iter->Valid() && iter->key() == Slice(key)) {
+    // iter->value() 就是 filter 的起始点位和大小，并继续解析
     ReadFilter(iter->value());
   }
   delete iter;
   delete meta;
 }
 
+// 读取 filter block 的内容
 void Table::ReadFilter(const Slice& filter_handle_value) {
   Slice v = filter_handle_value;
   BlockHandle filter_handle;
@@ -122,12 +142,15 @@ void Table::ReadFilter(const Slice& filter_handle_value) {
     opt.verify_checksums = true;
   }
   BlockContents block;
+  // 将 filter block 的内容提取到 block 中
   if (!ReadBlock(rep_->file, opt, filter_handle, &block).ok()) {
     return;
   }
   if (block.heap_allocated) {
     rep_->filter_data = block.data.data();  // Will need to delete later
   }
+  // 为 filter block 创建一个 FilterBlockReader 对象，用于后续的查询操作
+  // 相当于在 table-cache 中保存了一个 filter block
   rep_->filter = new FilterBlockReader(rep_->options.filter_policy, block.data);
 }
 
@@ -205,7 +228,9 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
+
 Iterator* Table::NewIterator(const ReadOptions& options) const {
+  // 返回一个用于读取 Index-Block 的迭代器
   return NewTwoLevelIterator(
       rep_->index_block->NewIterator(rep_->options.comparator),
       &Table::BlockReader, const_cast<Table*>(this), options);

@@ -467,9 +467,12 @@ bool Version::OverlapInLevel(int level, const Slice* smallest_user_key,
                                smallest_user_key, largest_user_key);
 }
 
+// 根据 MemTable 数据的键范围生成的 SST 文件选择一个合适的 Level 来存储数据
 int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
                                         const Slice& largest_user_key) {
+  // 从 Level0 开始查找                                        
   int level = 0;
+  // 如果 MemTable 的 Key 范围与 Level0 的文件有重叠，那么就选择 Level0
   if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key)) {
     // Push to next level if there is no overlap in next level,
     // and the #bytes overlapping in the level after that are limited.
@@ -477,17 +480,23 @@ int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
     InternalKey limit(largest_user_key, 0, static_cast<ValueType>(0));
     std::vector<FileMetaData*> overlaps;
     while (level < config::kMaxMemCompactLevel) {
+      // 检查当前 Level 层的文件是否与 MemTable 的最小和最大的 Key 是否有重叠
+      // 如果有重叠，那么就选择当前 Level 层
       if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key)) {
         break;
       }
+      // 如果当前的 Level 没有达到最高层
       if (level + 2 < config::kNumLevels) {
         // Check that file does not overlap too many grandparent bytes.
+        // 计算当前文件在 Level+2 层的重叠的文件的总大小
         GetOverlappingInputs(level + 2, &start, &limit, &overlaps);
         const int64_t sum = TotalFileSize(overlaps);
+        // 如果重叠的文件的总大小超过了 MaxGrandParentOverlapBytes，那么就不选择当前 Level 层
         if (sum > MaxGrandParentOverlapBytes(vset_->options_)) {
           break;
         }
       }
+      // 往上增加 Level 层级
       level++;
     }
   }
@@ -626,8 +635,10 @@ class VersionSet::Builder {
   }
 
   // Apply all of the edits in *edit to the current state.
+  // 更新一些文件
   void Apply(const VersionEdit* edit) {
     // Update compaction pointers
+    // compact_pointer_ 维护的是 每一层（level）的 compaction 进度
     for (size_t i = 0; i < edit->compact_pointers_.size(); i++) {
       const int level = edit->compact_pointers_[i].first;
       vset_->compact_pointer_[level] =
@@ -635,6 +646,7 @@ class VersionSet::Builder {
     }
 
     // Delete files
+    // deleted_files_ 存储着 需要删除的 SSTable 文件。
     for (const auto& deleted_file_set_kvp : edit->deleted_files_) {
       const int level = deleted_file_set_kvp.first;
       const uint64_t number = deleted_file_set_kvp.second;
@@ -642,6 +654,7 @@ class VersionSet::Builder {
     }
 
     // Add new files
+    // new_files_ 存储着 新加入的 SSTable 文件。
     for (size_t i = 0; i < edit->new_files_.size(); i++) {
       const int level = edit->new_files_[i].first;
       FileMetaData* f = new FileMetaData(edit->new_files_[i].second);
@@ -660,18 +673,24 @@ class VersionSet::Builder {
       // same as the compaction of 40KB of data.  We are a little
       // conservative and allow approximately one seek for every 16KB
       // of data before triggering a compaction.
+      // 控制触发 Compaction 的频率
+      // 每 16 KB 数据允许一次 Seek
+      // 最小 seek 限制为 100
       f->allowed_seeks = static_cast<int>((f->file_size / 16384U));
       if (f->allowed_seeks < 100) f->allowed_seeks = 100;
 
+      // 更新文件集合
       levels_[level].deleted_files.erase(f->number);
       levels_[level].added_files->insert(f);
     }
   }
 
   // Save the current state in *v.
+  // 用于 LevelDB 的 Version 维护，确保 Version 在变更后能正确存储所有 SSTable，并保持正确的顺序。
   void SaveTo(Version* v) {
     BySmallestKey cmp;
     cmp.internal_comparator = &vset_->icmp_;
+    // 遍历每一层的 SSTable 文件，并合并新添加的文件与现有的 SSTable。
     for (int level = 0; level < config::kNumLevels; level++) {
       // Merge the set of added files with the set of pre-existing files.
       // Drop any deleted files.  Store the result in *v.
@@ -774,6 +793,7 @@ void VersionSet::AppendVersion(Version* v) {
   v->next_->prev_ = v;
 }
 
+// 将 VersionEdit 的元信息变更应用到当前的 Version 中
 Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
   if (edit->has_log_number_) {
     assert(edit->log_number_ >= log_number_);
@@ -782,33 +802,46 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     edit->SetLogNumber(log_number_);
   }
 
+  // 设置前一个日志编号
   if (!edit->has_prev_log_number_) {
     edit->SetPrevLogNumber(prev_log_number_);
   }
 
+  // 设置下一个 sst 文件编号
   edit->SetNextFile(next_file_number_);
+  // 设置最新的 Sequence Number
   edit->SetLastSequence(last_sequence_);
 
+  // 根据 VersionEdit 初始化一个 Version 对象
+  // VersionEdit 是 Version 类的一个成员变量
   Version* v = new Version(this);
   {
+    // Builder 是 VersionEdit 的一个内部类
     Builder builder(this, current_);
+    // 根据 VersionEdit 更新 VersionSet 对象的内容
     builder.Apply(edit);
+    // 有新的 SST 生成，调整所有 SST 文件的位置
     builder.SaveTo(v);
   }
+  // 计算当前 Version 中最需要进行 Compaction 的层级
   Finalize(v);
 
   // Initialize new descriptor log file if necessary by creating
   // a temporary file that contains a snapshot of the current version.
   std::string new_manifest_file;
   Status s;
+  // 查看当前有没有 Manifest 文件
   if (descriptor_log_ == nullptr) {
     // No reason to unlock *mu here since we only hit this path in the
     // first call to LogAndApply (when opening the database).
     assert(descriptor_file_ == nullptr);
+    // 生成新的 Manifest 名字
     new_manifest_file = DescriptorFileName(dbname_, manifest_file_number_);
+    // 打开一个 Manifest 文件
     s = env_->NewWritableFile(new_manifest_file, &descriptor_file_);
     if (s.ok()) {
       descriptor_log_ = new log::Writer(descriptor_file_);
+      // 将当前数据快照写入 Manifest 文件
       s = WriteSnapshot(descriptor_log_);
     }
   }
@@ -820,9 +853,12 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     // Write new record to MANIFEST log
     if (s.ok()) {
       std::string record;
+      // 将 VersionEdit 编码更新到 Mainfest 文件中, 往后追加一条日志
       edit->EncodeTo(&record);
+      // 将快照写入 Manifest 方便崩溃恢复
       s = descriptor_log_->AddRecord(record);
       if (s.ok()) {
+        // 确保数据被写入磁盘
         s = descriptor_file_->Sync();
       }
       if (!s.ok()) {
@@ -833,6 +869,7 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
     // If we just created a new descriptor file, install it by writing a
     // new CURRENT file that points to it.
     if (s.ok() && !new_manifest_file.empty()) {
+      // 如果成功写入了新的 Manifest 文件，那么将 CURRENT 文件指向新的 Manifest 文件
       s = SetCurrentFile(env_, dbname_, manifest_file_number_);
     }
 
@@ -841,10 +878,13 @@ Status VersionSet::LogAndApply(VersionEdit* edit, port::Mutex* mu) {
 
   // Install the new version
   if (s.ok()) {
+    // 如果更新成功，将新版本添加到版本集合中，更新 WAL 编号和前一个 WAL 编号
+    // 将 VersionEdit 中的 current_ 指向最新的 Verison
     AppendVersion(v);
     log_number_ = edit->log_number_;
     prev_log_number_ = edit->prev_log_number_;
   } else {
+    // 如果出现错误的话，删除新版本，清理临时文件和日志文件
     delete v;
     if (!new_manifest_file.empty()) {
       delete descriptor_log_;
@@ -1028,8 +1068,11 @@ void VersionSet::MarkFileNumberUsed(uint64_t number) {
   }
 }
 
+// 计算当前 Version 中最需要进行 Compaction 的层级
+// 计算不同层的压缩分数来决定哪个层的 SSTable 文件最应该被合并
 void VersionSet::Finalize(Version* v) {
   // Precomputed best level for next compaction
+  // 初始化最佳的压缩层级和压缩分数
   int best_level = -1;
   double best_score = -1;
 
@@ -1047,21 +1090,27 @@ void VersionSet::Finalize(Version* v) {
       // file size is small (perhaps because of a small write-buffer
       // setting, or very high compression ratios, or lots of
       // overwrites/deletions).
+      // 计算 Level0 的压缩分数
       score = v->files_[level].size() /
               static_cast<double>(config::kL0_CompactionTrigger);
     } else {
+      //  计算 L1 及更高层的 Compaction 分数
       // Compute the ratio of current size to size limit.
+      // 计算当前层文件总大小
       const uint64_t level_bytes = TotalFileSize(v->files_[level]);
+      // 得出压缩分数
       score =
           static_cast<double>(level_bytes) / MaxBytesForLevel(options_, level);
     }
 
+    // 选出当前最需要 Compaction 的层数
     if (score > best_score) {
       best_level = level;
       best_score = score;
     }
   }
 
+  // 记录最终的结果
   v->compaction_level_ = best_level;
   v->compaction_score_ = best_score;
 }
@@ -1074,6 +1123,7 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
   edit.SetComparatorName(icmp_.user_comparator()->Name());
 
   // Save compaction pointers
+  // Compaction 指针用来记录每一层的 Compaction 进度
   for (int level = 0; level < config::kNumLevels; level++) {
     if (!compact_pointer_[level].empty()) {
       InternalKey key;
@@ -1083,6 +1133,7 @@ Status VersionSet::WriteSnapshot(log::Writer* log) {
   }
 
   // Save files
+  // 记录所有的 SST 文件
   for (int level = 0; level < config::kNumLevels; level++) {
     const std::vector<FileMetaData*>& files = current_->files_[level];
     for (size_t i = 0; i < files.size(); i++) {

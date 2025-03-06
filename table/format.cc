@@ -22,6 +22,7 @@ void BlockHandle::EncodeTo(std::string* dst) const {
   PutVarint64(dst, size_);
 }
 
+// 从 input 中解析出 offset_ 和 size_
 Status BlockHandle::DecodeFrom(Slice* input) {
   if (GetVarint64(input, &offset_) && GetVarint64(input, &size_)) {
     return Status::OK();
@@ -48,6 +49,7 @@ void Footer::EncodeTo(std::string* dst) const {
   (void)original_size;  // Disable unused variable warning.
 }
 
+// 从 input 中解析出页脚的两个 BlockHandle，metaindex_handle_ 和 index_handle_
 Status Footer::DecodeFrom(Slice* input) {
   if (input->size() < kEncodedLength) {
     return Status::Corruption("not an sstable (footer too short)");
@@ -58,15 +60,18 @@ Status Footer::DecodeFrom(Slice* input) {
   const uint32_t magic_hi = DecodeFixed32(magic_ptr + 4);
   const uint64_t magic = ((static_cast<uint64_t>(magic_hi) << 32) |
                           (static_cast<uint64_t>(magic_lo)));
+  // 检查魔数是否正确
   if (magic != kTableMagicNumber) {
     return Status::Corruption("not an sstable (bad magic number)");
   }
 
+  // 解析 metaindex_handle_ 和 index_handle_
   Status result = metaindex_handle_.DecodeFrom(input);
   if (result.ok()) {
     result = index_handle_.DecodeFrom(input);
   }
   if (result.ok()) {
+    // 检查是否还有剩余的数据
     // We skip over any leftover data (just padding for now) in "input"
     const char* end = magic_ptr + 8;
     *input = Slice(end, input->data() + input->size() - end);
@@ -74,6 +79,7 @@ Status Footer::DecodeFrom(Slice* input) {
   return result;
 }
 
+// 从文件中读取一个 block
 Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
                  const BlockHandle& handle, BlockContents* result) {
   result->data = Slice();
@@ -82,9 +88,11 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
 
   // Read the block contents as well as the type/crc footer.
   // See table_builder.cc for the code that built this structure.
+  // 读取 block 的内容以及 type/crc 尾部
   size_t n = static_cast<size_t>(handle.size());
   char* buf = new char[n + kBlockTrailerSize];
   Slice contents;
+  // 从文件中读取 block 的内容
   Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
   if (!s.ok()) {
     delete[] buf;
@@ -96,6 +104,7 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   }
 
   // Check the crc of the type and the block contents
+  // 检查 type 和 block 内容的 crc
   const char* data = contents.data();  // Pointer to where Read put the data
   if (options.verify_checksums) {
     const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));

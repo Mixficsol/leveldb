@@ -60,6 +60,8 @@ class VersionEdit {
   // Add the specified file at the specified number.
   // REQUIRES: This version has not been saved (see VersionSet::SaveTo)
   // REQUIRES: "smallest" and "largest" are smallest and largest keys in file
+ 
+  // new_files_ 是 VersionEdit 的一个成员变量 Vector，用来保存元信息变更信息
   void AddFile(int level, uint64_t file, uint64_t file_size,
                const InternalKey& smallest, const InternalKey& largest) {
     FileMetaData f;

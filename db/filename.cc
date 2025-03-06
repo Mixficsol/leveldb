@@ -30,11 +30,13 @@ std::string LogFileName(const std::string& dbname, uint64_t number) {
   return MakeFileName(dbname, number, "log");
 }
 
+// 最新的 SST 文件名
 std::string TableFileName(const std::string& dbname, uint64_t number) {
   assert(number > 0);
   return MakeFileName(dbname, number, "ldb");
 }
 
+// 老的 SST 文件名
 std::string SSTTableFileName(const std::string& dbname, uint64_t number) {
   assert(number > 0);
   return MakeFileName(dbname, number, "sst");

@@ -62,7 +62,7 @@ inline void EncodeFixed32(char* dst, uint32_t value) {
   buffer[3] = static_cast<uint8_t>(value >> 24);
 }
 
-// 将一个 uint64_t（8 字节无符号整数）编码为 固定长度的 8 字节，并存储到 dst 指向的缓冲区中
+// 将一个 uint64_t（8 字节无符号整数）编码为固定长度的 8 字节，并存储到 dst 指向的缓冲区中
 inline void EncodeFixed64(char* dst, uint64_t value) {
   uint8_t* const buffer = reinterpret_cast<uint8_t*>(dst);
 

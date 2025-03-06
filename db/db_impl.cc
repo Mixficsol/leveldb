@@ -502,7 +502,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   return status;
 }
 
-// 往 level-0 中写入数据
+// 往 level-0 中写入 sst 文件
 Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
                                 Version* base) {
   mutex_.AssertHeld();
@@ -519,6 +519,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
+    // 写入 sst 文件落盘
     s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }
@@ -532,17 +533,21 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   // Note that if file_size is zero, the file has been deleted and
   // should not be added to the manifest.
   int level = 0;
+  // 如果写入成功，将元信息变更更新到 VersionEdit 中
   if (s.ok() && meta.file_size > 0) {
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != nullptr) {
+      // 获取 sst 文件应该放到的 level 层
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
+    // 将 sst 文件的信息添加到 VersionEdit 中
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
                   meta.largest);
   }
 
   CompactionStats stats;
+  // 一些统计信息更新
   stats.micros = env_->NowMicros() - start_micros;
   stats.bytes_written = meta.file_size;
   stats_[level].Add(stats);
@@ -557,6 +562,7 @@ void DBImpl::CompactMemTable() {
   // Save the contents of the memtable as a new Table
   // 新建一个 VersionEdit 对象，将 DB 的当前的 version 保存在 Version 中
   VersionEdit edit;
+  // versions_ 是 db_impl 的一个 VersionSet 的成员变量，内部有一个 Version 保存当前最新的 Version
   Version* base = versions_->current();
   base->Ref();
   // 将 imm_ 的数据写入到 level-0 中
@@ -569,8 +575,11 @@ void DBImpl::CompactMemTable() {
 
   // Replace immutable memtable with the generated Table
   if (s.ok()) {
+    // 设置上一个 log 文件的编号为 0, 表示之前的 WAL 日志可以不再需要了，因为数据已经落盘了
     edit.SetPrevLogNumber(0);
+    // 设置下一个 Wal 文件的 file-number
     edit.SetLogNumber(logfile_number_);  // Earlier logs no longer needed
+    // 将 Version-edit 的版本更新到 Manifest 中
     s = versions_->LogAndApply(&edit, &mutex_);
   }
 
@@ -1157,8 +1166,10 @@ Status DBImpl::Get(const ReadOptions& options, const Slice& key,
     // First look in the memtable, then in the immutable memtable (if any).
     // 构造出一个查找键 lkey，结合 key 和 snapshot 
     LookupKey lkey(key, snapshot);
+    // 在 memtable 上面查找
     if (mem->Get(lkey, value, &s)) {
       // Done
+      // 在 immutable 上查找
     } else if (imm != nullptr && imm->Get(lkey, value, &s)) {
       // Done
     } else {

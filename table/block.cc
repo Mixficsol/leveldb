@@ -281,8 +281,10 @@ Iterator* Block::NewIterator(const Comparator* comparator) {
   if (size_ < sizeof(uint32_t)) {
     return NewErrorIterator(Status::Corruption("bad block contents"));
   }
+  // 计算 Block 中 Restart 重启点的数量
   const uint32_t num_restarts = NumRestarts();
   if (num_restarts == 0) {
+    // 如果没有重启点的话，直接返回一个空的迭代器
     return NewEmptyIterator();
   } else {
     return new Iter(comparator, data_, restart_offset_, num_restarts);

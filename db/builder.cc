@@ -50,6 +50,7 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
 
     // Finish and check for builder errors
     s = builder->Finish();
+    // 成功写完一个 SST 文件后，将文件大小记录到 meta 中
     if (s.ok()) {
       meta->file_size = builder->FileSize();
       assert(meta->file_size > 0);
@@ -68,7 +69,8 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
 
     if (s.ok()) {
       // Verify that the table is usable
-      // 创建一个 Table_cache 迭代器
+      // 这里的 table_cache 是 db_impl 中的 table_cache_
+      // 更新 TableCache 中的缓存
       Iterator* it = table_cache->NewIterator(ReadOptions(), meta->number,
                                               meta->file_size);
       s = it->status();
