@@ -113,6 +113,7 @@ void WriteBatch::Put(const Slice& key, const Slice& value) {
   PutLengthPrefixedSlice(&rep_, value);
 }
 
+// 将 WriteBathc 的操作计数 + 1，将当前操作类型添加到 rep_ 中，并将 key 添加到 rep_ 中
 void WriteBatch::Delete(const Slice& key) {
   WriteBatchInternal::SetCount(this, WriteBatchInternal::Count(this) + 1);
   rep_.push_back(static_cast<char>(kTypeDeletion));

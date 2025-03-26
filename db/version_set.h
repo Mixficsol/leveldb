@@ -249,6 +249,7 @@ class VersionSet {
   Iterator* MakeInputIterator(Compaction* c);
 
   // Returns true iff some level needs a compaction.
+  // 当 compaction_score_ 高于 1 时，说明 compaction_level_ 这个层级的 SSTable 需要进行 Compaction
   bool NeedsCompaction() const {
     Version* v = current_;
     return (v->compaction_score_ >= 1) || (v->file_to_compact_ != nullptr);

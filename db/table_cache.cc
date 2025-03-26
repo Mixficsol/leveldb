@@ -116,11 +116,13 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   return result;
 }
 
+// 在 TableCache 中查找是否有对应的文件的缓存 handle，如果有，那么就调用 Table::InternalGet 来查找 Key
 Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        uint64_t file_size, const Slice& k, void* arg,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)) {
   Cache::Handle* handle = nullptr;
+  // 从 TableCache 中查找是否有对应的文件的缓存 handle，Key 的 file_number 和 file_size 作为 Key
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;

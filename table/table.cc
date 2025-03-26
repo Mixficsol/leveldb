@@ -176,11 +176,13 @@ static void ReleaseBlock(void* arg, void* h) {
 Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
                              const Slice& index_value) {
   Table* table = reinterpret_cast<Table*>(arg);
+  // 获取 block_cache
   Cache* block_cache = table->rep_->options.block_cache;
   Block* block = nullptr;
   Cache::Handle* cache_handle = nullptr;
 
   BlockHandle handle;
+  // input 存储了 Data-Block 的偏移量和大小
   Slice input = index_value;
   Status s = handle.DecodeFrom(&input);
   // We intentionally allow extra stuff in index_value so that we
@@ -190,16 +192,23 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
     BlockContents contents;
     if (block_cache != nullptr) {
       char cache_key_buffer[16];
+      // 将 cache_id 和 Data-Block 的偏移量存储到 cache_key_buffer 中
       EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
       EncodeFixed64(cache_key_buffer + 8, handle.offset());
-      Slice key(cache_key_buffer, sizeof(cache_key_buffer));
+      // 创建一个 Slice 对象 key, key 是由 cache_id 和 Data-Block 的偏移量组成的
+      Slice key(cache_key_buffer, sizeof(cache_key_buffer))
+      // 在 block_cache 中查找是否有对应的 Data-Block，这里的 Key 是由 cache_id 和 Data-Block 的偏移量组成的;
       cache_handle = block_cache->Lookup(key);
+      // 如果找到了，那么就返回这个 Data-Block
       if (cache_handle != nullptr) {
         block = reinterpret_cast<Block*>(block_cache->Value(cache_handle));
       } else {
+        // 如果没有找到，那么就从 table-cache 读中读取文件找到 Data-Block
         s = ReadBlock(table->rep_->file, options, handle, &contents);
         if (s.ok()) {
+          // 将 Block 里面的内容放到 Block 对象中
           block = new Block(contents);
+          // 将 Block 插入到 block_cache 中
           if (contents.cachable && options.fill_cache) {
             cache_handle = block_cache->Insert(key, block, block->size(),
                                                &DeleteCachedBlock);
@@ -207,6 +216,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
         }
       }
     } else {
+      // 如果 Block-cache 是空的，说明没有开启 Block-Cache 那么就从 table-cache 读中读取文件找到 Data-Block
       s = ReadBlock(table->rep_->file, options, handle, &contents);
       if (s.ok()) {
         block = new Block(contents);
@@ -216,6 +226,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
 
   Iterator* iter;
   if (block != nullptr) {
+    // 为 Block 分配一个迭代器
     iter = block->NewIterator(table->rep_->options.comparator);
     if (cache_handle == nullptr) {
       iter->RegisterCleanup(&DeleteBlock, block, nullptr);
@@ -223,6 +234,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
       iter->RegisterCleanup(&ReleaseBlock, block_cache, cache_handle);
     }
   } else {
+    // 如果没有找到的话，返回一个空的迭代器
     iter = NewErrorIterator(s);
   }
   return iter;
@@ -240,16 +252,21 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
                           void (*handle_result)(void*, const Slice&,
                                                 const Slice&)) {
   Status s;
+  // 获取一个可以读取 Index-Block 的迭代器
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
   iiter->Seek(k);
   if (iiter->Valid()) {
     Slice handle_value = iiter->value();
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
+    // 如果连布隆过滤器都没有，那么就直接跳过 Index-Block 所记载的 Data-Block
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
+      // 否则的话说明这个 Key 可能存在于当前这个 Data-Block 中
+      // 这里的 iiter->key() 就是 Index-Block 中的 value
+      // 返回一个可以读取 Data-Block 的迭代器
       Iterator* block_iter = BlockReader(this, options, iiter->value());
       block_iter->Seek(k);
       if (block_iter->Valid()) {
